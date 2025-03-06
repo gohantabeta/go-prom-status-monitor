@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus:/etc/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.enable-lifecycle' # 再起動を可能に。
+
+  go-backend:
+    build: ./go-backend
+    ports:
+      - "8080:8080"
+    depends_on:
+      - prometheus
+    environment: # 必要に応じて環境変数を設定
+      - PROMETHEUS_URL=http://prometheus:9090
+
+  react-frontend:
+    build: ./react-frontend
+    ports:
+      - "3000:3000"  # create-react-app のデフォルトポート
+    depends_on:
+      - go-backend
+      - nginx
+
+  nginx:
+    image: nginx:latest
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    ports:
+      - "80:80"
+    depends_on:
+      - react-frontend # go-backend はNginxから直接見えない
