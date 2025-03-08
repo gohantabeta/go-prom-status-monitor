@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import ServiceStatus from './components/ServiceStatus';
+import './App.css';
 
 function App() {
   const [services, setServices] = useState([]);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const fetchServices = async () => {
@@ -13,8 +15,10 @@ function App() {
         }
         const data = await response.json();
         setServices(data);
+        setError(null);
       } catch (error) {
         console.error("Could not fetch services:", error);
+        setError(error.message);
       }
     };
 
