@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000" 
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123  # パスワードは適宜変更
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      # データの永続化が必要な場合はコメントを解除
+      # - ./grafana/data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - monitoring-network
+
+networks:
+  monitoring-network:
+    external: true
+    name: go-prom-status-monitor_default
