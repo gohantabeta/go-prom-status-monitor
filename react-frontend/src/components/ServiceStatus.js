@@ -1,13 +1,24 @@
 import React from 'react';
+import './ServiceStatus.css';
+
 
 function ServiceStatus({ service }) {
+  const cardClassName = `service-card ${service.status === 'up' ? 'active' : 'inactive'}`;
+
   return (
-    <div>
-      <h2>{service.Name}</h2>
-      <p>Status: {service.Status}</p>
-      {service.Status === 'up' && (
-        <button onClick={() => window.location.href = `/service/${service.Name}`}>
-          Access {service.Name}
+    <div className={cardClassName}>
+      <h2 className="service-name">{service.name}</h2>
+      <div className="service-status">
+        <span className={`status-indicator ${service.status}`}>
+          {service.status === 'up' ? 'Active' : 'Inactive'}
+        </span>
+      </div>
+      {service.status === 'up' && (
+        <button 
+          className="access-button"
+          onClick={() => window.location.href = `/service/${service.name}`}
+        >
+          Access Service
         </button>
       )}
     </div>
