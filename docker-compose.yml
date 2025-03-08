@@ -27,6 +27,14 @@ services:
       - prometheus
     environment:
       - PROMETHEUS_URL=http://prometheus:9090
+    logging:
+      driver: "json-file"
+      options:
+        mode: "non-blocking"
+        max-buffer-size: "1m"
+    networks:
+      - default
+      - external-access
 
   react-frontend:
     build: ./react-frontend
@@ -43,6 +51,13 @@ services:
       - "80:80"
     depends_on:
       - react-frontend
+
 networks:
   default:
     name: go-prom-status-monitor_default
+
+  external-access:   # 外部通信用
+    name: external-access
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"

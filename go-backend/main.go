@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,6 +25,8 @@ type ServiceStatus struct {
 }
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.SetOutput(os.Stdout)
 	prometheusURL := os.Getenv("PROMETHEUS_URL")
 	if prometheusURL == "" {
 		prometheusURL = "http://localhost:9090" // デフォルト値
@@ -70,31 +74,109 @@ func main() {
 		json.NewEncoder(w).Encode(services)
 	})
 
-	// Nginx リバースプロキシ用のハンドラ (/service/* へのリクエスト)
 	http.HandleFunc("/service/", func(w http.ResponseWriter, r *http.Request) {
-		// /service/{serviceName} の {serviceName} 部分を取り出す
-		serviceName := strings.TrimPrefix(r.URL.Path, "/service/")
+		log.Printf("Received request: %s %s", r.Method, r.URL.String())
 
-		// Prometheusに問い合わせ、サービス名に対応するターゲットURLを取得
-		targetURL := getTargetURL(v1api, serviceName) //関数実装予定
+		serviceName := strings.TrimPrefix(r.URL.Path, "/service/")
+		parts := strings.SplitN(serviceName, "/", 2)
+		serviceName = parts[0]
+		subPath := "/"
+		if len(parts) > 1 {
+			subPath = "/" + parts[1]
+		}
+
+		targetURL := getTargetURL(v1api, serviceName)
+		log.Printf("Service: %s, Target URL: %s, SubPath: %s", serviceName, targetURL, subPath)
 		if targetURL == "" {
 			http.Error(w, "Service not found or not running", http.StatusNotFound)
 			return
 		}
 
-		// httputil.ReverseProxy を使ってプロキシ
-		target, err := url.Parse(targetURL) // http://192.168.1.XX:YYY
+		target, err := url.Parse(targetURL)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error parsing target URL: %v", err), http.StatusInternalServerError)
 			return
 		}
+
 		proxy := httputil.NewSingleHostReverseProxy(target)
 
-		// プロキシ実行前に必要なヘッダーなどを設定
-		r.Host = target.Host
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			if location := resp.Header.Get("Location"); location != "" {
+				parsedLocation, err := url.Parse(location)
+				if err != nil {
+					return err
+				}
+				if parsedLocation.IsAbs() {
+					// 絶対URLの場合、ホストとスキームを書き換え
+					parsedLocation.Host = r.Host
+					parsedLocation.Scheme = "http"
+					parsedLocation.Path = "/service/" + serviceName + parsedLocation.Path
+					resp.Header.Set("Location", parsedLocation.String())
+				} else {
+					// 相対パスの場合、プレフィックスを追加
+					resp.Header.Set("Location", "/service/"+serviceName+location)
+				}
+			}
 
+			// HTML内のリンクを書き換える
+			if strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
+				resp.Header.Set("X-Frame-Options", "SAMEORIGIN")
+				resp.Header.Set("Content-Security-Policy", "frame-ancestors 'self'")
+
+				// レスポンスボディを読み込む
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return err
+				}
+				resp.Body.Close()
+
+				// 相対パスを書き換え
+				modifiedBody := string(body)
+				// src属性の書き換え
+				modifiedBody = regexp.MustCompile(`(src|href)="/(.*?)""`).ReplaceAllString(
+					modifiedBody,
+					`$1="/service/`+serviceName+`/$2"`,
+				)
+				// CSS内のurl()の書き換え
+				modifiedBody = regexp.MustCompile(`url\(['"]?/([^'"]*?)['"]?\)`).ReplaceAllString(
+					modifiedBody,
+					`url('/service/`+serviceName+`/$1')`,
+				)
+
+				// 新しいボディを設定
+				resp.Body = io.NopCloser(strings.NewReader(modifiedBody))
+				resp.ContentLength = int64(len(modifiedBody))
+				resp.Header.Set("Content-Length", fmt.Sprint(len(modifiedBody)))
+			}
+			return nil
+		}
+
+		originalDirector := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			originalDirector(req)
+
+			originalPath := req.URL.Path
+			log.Printf("Original request path: %s", req.URL.Path)
+
+			req.Host = target.Host
+			req.URL.Host = target.Host
+			req.URL.Scheme = target.Scheme
+			req.URL.Path = strings.TrimPrefix(originalPath, "/service/"+serviceName)
+			if req.URL.Path == "" {
+				req.URL.Path = "/"
+			}
+
+			// X-Forwarded-* ヘッダーを設定
+			req.Header.Set("X-Forwarded-Host", r.Host)
+			req.Header.Set("X-Forwarded-Proto", "http")
+			req.Header.Set("X-Forwarded-Prefix", "/service/"+serviceName)
+
+			log.Printf("Modified request: Host=%s, Path=%s", req.Host, req.URL.Path)
+			log.Printf("Headers: %v", req.Header)
+		}
+
+		log.Printf("Proxying request to: %s%s", target.String(), subPath)
 		proxy.ServeHTTP(w, r)
-
 	})
 
 	log.Println("Go backend server listening on :8080")
@@ -112,9 +194,11 @@ func getTargetURL(v1api v1.API, serviceName string) string {
 	}
 
 	for _, target := range result.Active {
-		if target.Health == v1.HealthGood {
-			if string(target.Labels["job"]) == serviceName { // job名で比較
-				return strings.Replace(string(target.ScrapeURL), "/metrics", "", 1) // http://192.168.1.XX:YYY を返す
+		log.Printf("Checking target - Job: %s, Labels: %v, target: %v", target.Labels["job"], target.Labels, target)
+		if target.Health == v1.HealthGood && string(target.Labels["job"]) == serviceName {
+			log.Printf("health good & name match")
+			if address := target.DiscoveredLabels["__address__"]; address != "" {
+				return string(address)
 			}
 		}
 	}
