@@ -1,18 +1,26 @@
 global:
-  scrape_interval: 15s # スクレイピング間隔
+  scrape_interval: 15s
+  evaluation_interval: 15s
 
 scrape_configs:
-  # - job_name: 'prometheus'
-  #   static_configs:
-  #     - targets: ['localhost:9090']
-
-  # # 他の監視対象サービスの設定 (例)
-  # - job_name: 'my-service'
-  #   static_configs:
-  #      - targets: ['192.168.1.10:9100']  # 監視対象サービスのIPとポート
-  # targets.json を使う場合(動的に監視対象を変えたい場合)
-  - job_name: 'my-dynamic-services'
+  # メトリクスエンドポイントを持つターゲット用の設定
+  - job_name: 'prometheus_targets'
     file_sd_configs:
-     - files:
-       - targets.json
-       refresh_interval: 5s
+      - files:
+        - '/etc/prometheus/targets_metrics.json'
+
+  # HTTPステータスのみを監視するターゲット用の設定
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    file_sd_configs:
+      - files:
+        - '/etc/prometheus/targets_http.json'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

@@ -1,0 +1,18 @@
+[
+  {
+    "targets": ["http://example.com:8080"],
+    "labels": {
+      "job": "http_status_only",      //サービスの識別子
+      "service_type": "web",          // サービスタイプなどの追加情報
+      "check_type": "http_2xx"        // blackbox_exporterのモジュール名
+    }
+  },
+  {
+    "targets": ["https://api.example.com"],
+    "labels": {
+      "job": "api_health_check",
+      "service_type": "api",
+      "check_interval": "30s"         // スクレイプ間隔の設定（prometheusの設定と合わせる）
+    }
+  }
+]

@@ -1,6 +1,14 @@
 version: '3.8'
 
 services:
+  blackbox-exporter:
+    image: prom/blackbox-exporter:latest
+    ports:
+      - "9115:9115"
+    volumes:
+      - ./blackbox/config.yml:/config/blackbox.yml
+    command:
+      - "--config.file=/config/blackbox.yml"
   prometheus:
     image: prom/prometheus:latest
     volumes:
@@ -9,7 +17,7 @@ services:
       - "9090:9090"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--web.enable-lifecycle' # 再起動を可能に。
+      - '--web.enable-lifecycle'
 
   go-backend:
     build: ./go-backend
@@ -17,7 +25,7 @@ services:
       - "8080:8080"
     depends_on:
       - prometheus
-    environment: # 必要に応じて環境変数を設定
+    environment:
       - PROMETHEUS_URL=http://prometheus:9090
 
   react-frontend:
@@ -34,4 +42,7 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - react-frontend # go-backend はNginxから直接見えない
+      - react-frontend
+networks:
+  default:
+    name: go-prom-status-monitor_default
