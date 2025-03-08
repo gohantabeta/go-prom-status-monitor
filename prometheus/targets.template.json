@@ -1,0 +1,11 @@
+[
+    {
+      "targets": [
+        "${TARGET_1}",
+        "${TARGET_2}"
+      ],
+      "labels": {
+        "job": "${JOB_NAME}"
+      }
+    }
+  ]

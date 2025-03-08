@@ -2,17 +2,17 @@ global:
   scrape_interval: 15s # スクレイピング間隔
 
 scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
+  # - job_name: 'prometheus'
+  #   static_configs:
+  #     - targets: ['localhost:9090']
 
-  # 他の監視対象サービスの設定 (例)
-  - job_name: 'my-service'
-    static_configs:
-       - targets: ['192.168.1.10:9100']  # 監視対象サービスのIPとポート
+  # # 他の監視対象サービスの設定 (例)
+  # - job_name: 'my-service'
+  #   static_configs:
+  #      - targets: ['192.168.1.10:9100']  # 監視対象サービスのIPとポート
   # targets.json を使う場合(動的に監視対象を変えたい場合)
-  #- job_name: 'my-dynamic-services'
-  #  file_sd_configs:
-  #    - files:
-  #      - targets.json
-  #      refresh_interval: 5s
+  - job_name: 'my-dynamic-services'
+    file_sd_configs:
+     - files:
+       - targets.json
+       refresh_interval: 5s

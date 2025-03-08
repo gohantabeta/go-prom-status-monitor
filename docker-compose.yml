@@ -23,10 +23,9 @@ services:
   react-frontend:
     build: ./react-frontend
     ports:
-      - "3000:3000"  # create-react-app のデフォルトポート
+      - "3000:80"
     depends_on:
       - go-backend
-      - nginx
 
   nginx:
     image: nginx:latest

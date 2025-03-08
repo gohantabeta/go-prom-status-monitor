@@ -42,18 +42,15 @@ func main() {
 		defer cancel()
 
 		// Prometheus から target の状態を取得 (up のものだけ)
-		result, warnings, err := v1api.Targets(ctx)
+		result, err := v1api.Targets(ctx)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error querying Prometheus: %v", err), http.StatusInternalServerError)
 			return
 		}
-		if len(warnings) > 0 {
-			fmt.Printf("Warnings: %v\n", warnings)
-		}
 
 		var services []ServiceStatus
 		for _, target := range result.Active {
-			if target.Health == v1.TargetsHealthUp {
+			if target.Health == v1.HealthGood {
 				services = append(services, ServiceStatus{
 					Name:   string(target.Labels["job"]), // 例: job ラベルをサービス名とする
 					Status: "up",
@@ -86,7 +83,11 @@ func main() {
 		}
 
 		// httputil.ReverseProxy を使ってプロキシ
-		target, _ := url.Parse(targetURL) // http://192.168.1.XX:YYY
+		target, err := url.Parse(targetURL) // http://192.168.1.XX:YYY
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error parsing target URL: %v", err), http.StatusInternalServerError)
+			return
+		}
 		proxy := httputil.NewSingleHostReverseProxy(target)
 
 		// プロキシ実行前に必要なヘッダーなどを設定
@@ -100,17 +101,18 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-// PrometheusからtargetのURLを得る関数.  /api/servicesを使いまわしてもOK
+// PrometheusからtargetのURLを得る関数.
 func getTargetURL(v1api v1.API, serviceName string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	result, _, err := v1api.Targets(ctx)
+
+	result, err := v1api.Targets(ctx)
 	if err != nil {
 		return ""
 	}
 
 	for _, target := range result.Active {
-		if target.Health == v1.TargetsHealthUp {
+		if target.Health == v1.HealthGood {
 			if string(target.Labels["job"]) == serviceName { // job名で比較
 				return strings.Replace(string(target.ScrapeURL), "/metrics", "", 1) // http://192.168.1.XX:YYY を返す
 			}

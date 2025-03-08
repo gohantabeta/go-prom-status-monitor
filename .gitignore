@@ -69,8 +69,10 @@ Thumbs.db
 
 # --- Project Specific ---
 
-# Prometheus data (optional, if you want to keep it in git)
-# /prometheus/data/
+# Prometheus data (optional)
+/prometheus/data/
+# Prometheus target file (ignore actual file, track template)
+/prometheus/targets.json
 
 # Nginx logs (optional)
 # /nginx/logs/
