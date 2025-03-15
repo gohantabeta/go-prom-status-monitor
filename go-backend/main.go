@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
-	"regexp"
+	"os/exec"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
@@ -23,7 +21,50 @@ type ServiceStatus struct {
 	Status string `json:"status"` // "up" or "down"
 	Target string `json:"target"` // プロキシ先のURL "192.168.1.XX:YYYY"
 }
+type NginxConfig struct {
+	ServiceName string
+	TargetURL   string
+}
 
+func generateNginxConfig(service ServiceStatus) error {
+	// テンプレート読み込み
+	tmpl, err := template.ParseFiles("/app/nginx/templates/service.conf.template")
+	if err != nil {
+		return fmt.Errorf("template parse error: %v", err)
+	}
+
+	// 設定ファイルパス
+	configPath := fmt.Sprintf("/app/nginx/services/%s.conf", service.Name)
+
+	// 設定ファイル生成
+	file, err := os.Create(configPath)
+	if err != nil {
+		return fmt.Errorf("file creation error: %v", err)
+	}
+	defer file.Close()
+
+	// テンプレート適用
+	config := NginxConfig{
+		ServiceName: service.Name,
+		TargetURL:   service.Target,
+	}
+	if err := tmpl.Execute(file, config); err != nil {
+		return fmt.Errorf("template execution error: %v", err)
+	}
+
+	return nil
+}
+
+func reloadNginx() error {
+	// シェルスクリプトを使用してnginxリロード
+	cmd := exec.Command("sh", "-c", "docker exec nginx nginx -s reload")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("nginx reload error: %v, output: %s", err, string(output))
+	}
+	log.Printf("Nginx reload output: %s", string(output))
+	return nil
+}
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.SetOutput(os.Stdout)
@@ -42,165 +83,90 @@ func main() {
 	v1api := v1.NewAPI(client)
 
 	http.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// Prometheus から target の状態を取得 (up のものだけ)
-		result, err := v1api.Targets(ctx)
+		services, err := getServices(v1api)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Error querying Prometheus: %v", err), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var services []ServiceStatus
-		for _, target := range result.Active {
-			if target.Health == v1.HealthGood {
-				services = append(services, ServiceStatus{
-					Name:   string(target.Labels["job"]), // 例: job ラベルをサービス名とする
-					Status: "up",
-					Target: string(target.ScrapeURL), // http://192.168.1.XX:YYYY/metrics という形
-				})
-			} else { // 停止中のサービスも情報として返したい場合
-				services = append(services, ServiceStatus{
-					Name:   string(target.Labels["job"]),
-					Status: "down",
-					Target: "", // ダウンしている場合はプロキシ先がない
-				})
+		// サービスごとにNginx設定を生成
+		for _, service := range services {
+			if service.Status == "up" {
+				if err := generateNginxConfig(service); err != nil {
+					log.Printf("Error generating nginx config for %s: %v", service.Name, err)
+				}
 			}
+		}
 
+		// Nginx設定をリロード
+		if err := reloadNginx(); err != nil {
+			log.Printf("Error reloading nginx: %v", err)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(services)
 	})
 
-	http.HandleFunc("/service/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received request: %s %s", r.Method, r.URL.String())
-
-		serviceName := strings.TrimPrefix(r.URL.Path, "/service/")
-		parts := strings.SplitN(serviceName, "/", 2)
-		serviceName = parts[0]
-		subPath := "/"
-		if len(parts) > 1 {
-			subPath = "/" + parts[1]
-		}
-
-		targetURL := getTargetURL(v1api, serviceName)
-		log.Printf("Service: %s, Target URL: %s, SubPath: %s", serviceName, targetURL, subPath)
-		if targetURL == "" {
-			http.Error(w, "Service not found or not running", http.StatusNotFound)
-			return
-		}
-
-		target, err := url.Parse(targetURL)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error parsing target URL: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		proxy := httputil.NewSingleHostReverseProxy(target)
-
-		proxy.ModifyResponse = func(resp *http.Response) error {
-			if location := resp.Header.Get("Location"); location != "" {
-				parsedLocation, err := url.Parse(location)
-				if err != nil {
-					return err
-				}
-				if parsedLocation.IsAbs() {
-					// 絶対URLの場合、ホストとスキームを書き換え
-					parsedLocation.Host = r.Host
-					parsedLocation.Scheme = "http"
-					parsedLocation.Path = "/service/" + serviceName + parsedLocation.Path
-					resp.Header.Set("Location", parsedLocation.String())
-				} else {
-					// 相対パスの場合、プレフィックスを追加
-					resp.Header.Set("Location", "/service/"+serviceName+location)
-				}
-			}
-
-			// HTML内のリンクを書き換える
-			if strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
-				resp.Header.Set("X-Frame-Options", "SAMEORIGIN")
-				resp.Header.Set("Content-Security-Policy", "frame-ancestors 'self'")
-
-				// レスポンスボディを読み込む
-				body, err := io.ReadAll(resp.Body)
-				if err != nil {
-					return err
-				}
-				resp.Body.Close()
-
-				// 相対パスを書き換え
-				modifiedBody := string(body)
-				// src属性の書き換え
-				modifiedBody = regexp.MustCompile(`(src|href)="/(.*?)""`).ReplaceAllString(
-					modifiedBody,
-					`$1="/service/`+serviceName+`/$2"`,
-				)
-				// CSS内のurl()の書き換え
-				modifiedBody = regexp.MustCompile(`url\(['"]?/([^'"]*?)['"]?\)`).ReplaceAllString(
-					modifiedBody,
-					`url('/service/`+serviceName+`/$1')`,
-				)
-
-				// 新しいボディを設定
-				resp.Body = io.NopCloser(strings.NewReader(modifiedBody))
-				resp.ContentLength = int64(len(modifiedBody))
-				resp.Header.Set("Content-Length", fmt.Sprint(len(modifiedBody)))
-			}
-			return nil
-		}
-
-		originalDirector := proxy.Director
-		proxy.Director = func(req *http.Request) {
-			originalDirector(req)
-
-			originalPath := req.URL.Path
-			log.Printf("Original request path: %s", req.URL.Path)
-
-			req.Host = target.Host
-			req.URL.Host = target.Host
-			req.URL.Scheme = target.Scheme
-			req.URL.Path = strings.TrimPrefix(originalPath, "/service/"+serviceName)
-			if req.URL.Path == "" {
-				req.URL.Path = "/"
-			}
-
-			// X-Forwarded-* ヘッダーを設定
-			req.Header.Set("X-Forwarded-Host", r.Host)
-			req.Header.Set("X-Forwarded-Proto", "http")
-			req.Header.Set("X-Forwarded-Prefix", "/service/"+serviceName)
-
-			log.Printf("Modified request: Host=%s, Path=%s", req.Host, req.URL.Path)
-			log.Printf("Headers: %v", req.Header)
-		}
-
-		log.Printf("Proxying request to: %s%s", target.String(), subPath)
-		proxy.ServeHTTP(w, r)
-	})
-
 	log.Println("Go backend server listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-// PrometheusからtargetのURLを得る関数.
-func getTargetURL(v1api v1.API, serviceName string) string {
+func getServices(v1api v1.API) ([]ServiceStatus, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	result, err := v1api.Targets(ctx)
 	if err != nil {
-		return ""
+		return nil, fmt.Errorf("error querying Prometheus: %v", err)
 	}
 
+	var services []ServiceStatus
 	for _, target := range result.Active {
-		log.Printf("Checking target - Job: %s, Labels: %v, target: %v", target.Labels["job"], target.Labels, target)
-		if target.Health == v1.HealthGood && string(target.Labels["job"]) == serviceName {
-			log.Printf("health good & name match")
-			if address := target.DiscoveredLabels["__address__"]; address != "" {
-				return string(address)
-			}
+		service := ServiceStatus{
+			Name: string(target.Labels["job"]),
 		}
+		log.Printf("target:%v, address:%s", target, target.DiscoveredLabels["__address__"])
+
+		if target.Health == v1.HealthGood {
+			service.Status = "up"
+			if address := target.DiscoveredLabels["__address__"]; address != "" {
+				// HTTPプレフィックスが含まれているかチェック
+				if !strings.HasPrefix(string(address), "http://") {
+					service.Target = fmt.Sprintf("http://%s", string(address))
+				} else {
+					service.Target = string(address)
+				}
+			}
+		} else {
+			service.Status = "down"
+		}
+
+		log.Printf("Found service: %s, status: %s, target: %s",
+			service.Name, service.Status, service.Target)
+		services = append(services, service)
 	}
-	return ""
+
+	return services, nil
 }
+
+// // PrometheusからtargetのURLを得る関数.
+// func getTargetURL(v1api v1.API, serviceName string) string {
+// 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// 	defer cancel()
+
+// 	result, err := v1api.Targets(ctx)
+// 	if err != nil {
+// 		return ""
+// 	}
+
+// 	for _, target := range result.Active {
+// 		log.Printf("Checking target - Job: %s, Labels: %v, target: %v", target.Labels["job"], target.Labels, target)
+// 		if target.Health == v1.HealthGood && string(target.Labels["job"]) == serviceName {
+// 			log.Printf("health good & name match")
+// 			if address := target.DiscoveredLabels["__address__"]; address != "" {
+// 				return string(address)
+// 			}
+// 		}
+// 	}
+// 	return ""
+// }

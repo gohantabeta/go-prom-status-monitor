@@ -21,6 +21,9 @@ services:
 
   go-backend:
     build: ./go-backend
+    volumes:
+      - ./go-backend/nginx:/app/nginx
+      - /var/run/docker.sock:/var/run/docker.sock 
     ports:
       - "8080:8080"
     depends_on:
@@ -32,9 +35,6 @@ services:
       options:
         mode: "non-blocking"
         max-buffer-size: "1m"
-    networks:
-      - default
-      - external-access
 
   react-frontend:
     build: ./react-frontend
@@ -45,19 +45,16 @@ services:
 
   nginx:
     image: nginx:latest
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    container_name: nginx 
     ports:
       - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./go-backend/nginx/services:/etc/nginx/conf.d/services
     depends_on:
+      - go-backend
       - react-frontend
 
 networks:
   default:
     name: go-prom-status-monitor_default
-
-  external-access:   # 外部通信用
-    name: external-access
-    driver: bridge
-    driver_opts:
-      com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"

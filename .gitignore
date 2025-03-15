@@ -72,7 +72,9 @@ Thumbs.db
 # Prometheus data (optional)
 /prometheus/data/
 # Prometheus target file (ignore actual file, track template)
-/prometheus/targets.json
+/prometheus/targets_http.json
+/prometheus/targets_metrics.json
 
+/go-backend/nginx/services/
 # Nginx logs (optional)
 # /nginx/logs/

@@ -13,9 +13,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /go-prom-status-monitor
 # --- 実行ステージ ---
 FROM alpine:latest
 
+RUN apk add --no-cache nginx
+RUN apk add --no-cache docker-cli
+
+
 WORKDIR /
 
 COPY --from=builder /go-prom-status-monitor /go-prom-status-monitor
+COPY nginx/templates /app/nginx/templates
 
 EXPOSE 8080
 

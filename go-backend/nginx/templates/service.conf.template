@@ -1,0 +1,53 @@
+# 静的ファイルの処理
+location ~ ^/service/{{.ServiceName}}/(.*\.(?:js|css|png|jpg|jpeg|gif|ico|woff|woff2|ttf|svg|eot))$ {
+    proxy_pass {{.TargetURL}}/$1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Prefix /service/{{.ServiceName}};
+    proxy_set_header X-Forwarded-Host $host;
+    # 大きなファイルのアップロード対応
+    client_max_body_size 512M;
+    # タイムアウト設定
+    proxy_connect_timeout 60s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+    default_type application/javascript;
+
+    expires 30d;
+    add_header Cache-Control "public, no-transform";
+}
+
+# メインのロケーション設定
+location /service/{{.ServiceName}}/ {
+    proxy_pass {{.TargetURL}}/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Prefix /service/{{.ServiceName}};
+    proxy_set_header X-Forwarded-Host $host;
+    # 大きなファイルのアップロード対応
+    client_max_body_size 512M;
+    # タイムアウト設定
+    proxy_connect_timeout 60s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+
+    expires 30d;
+    add_header Cache-Control "public, no-transform";
+
+    # リダイレクトの書き換え
+    proxy_redirect / /service/{{.ServiceName}}/;
+    proxy_redirect http://$host/ /service/{{.ServiceName}}/;
+    proxy_redirect https://$host/ /service/{{.ServiceName}}/;
+
+    # HTMLの書き換え
+    sub_filter_types text/html;
+    sub_filter_once off;
+    sub_filter 'href="/' 'href="/service/{{.ServiceName}}/';
+    sub_filter 'src="/' 'src="/service/{{.ServiceName}}/';
+    sub_filter 'url("/' 'url("/service/{{.ServiceName}}/';
+    sub_filter 'action="/' 'action="/service/{{.ServiceName}}/';
+}
